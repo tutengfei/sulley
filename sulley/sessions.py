@@ -10,6 +10,9 @@ import threading
 import BaseHTTPServer
 import httplib
 
+# libdnet for layer2 support
+import dnet
+
 import blocks
 import pedrpc
 import pgraph
@@ -110,7 +113,7 @@ class connection (pgraph.edge.edge):
 
 ########################################################################################################################
 class session (pgraph.graph):
-    def __init__ (self, session_filename=None, skip=0, sleep_time=1.0, log_level=2, proto="tcp", bind=None, restart_interval=0, timeout=5.0, web_port=26000, crash_threshold=3, restart_sleep_time=300):
+    def __init__ (self, session_filename=None, skip=0, sleep_time=1.0, log_level=2, proto="tcp", iface="eth0", af="ipv4", bind=None, restart_interval=0, timeout=5.0, web_port=26000, crash_threshold=3, restart_sleep_time=300, start_webserver=False):
         '''
         Extends pgraph.graph and provides a container for architecting protocol dialogs.
 
@@ -124,6 +127,10 @@ class session (pgraph.graph):
         @kwarg log_level:          (Optional, def=2) Set the log level, higher number == more log messages
         @type  proto:              String
         @kwarg proto:              (Optional, def="tcp") Communication protocol ("tcp", "udp", "ssl")
+        @type  iface:              String
+        @kwarg iface:              (Optional, def="eth0") Network interface for level2 fuzzing
+        @type  af:                 String
+        @kwarg af:                 (Optional, def="ipv4") Type of IP connection (accepted : ipv4 or ipv6)
         @type  bind:               Tuple (host, port)
         @kwarg bind:               (Optional, def=random) Socket bind address and port
         @type  timeout:            Float
@@ -134,6 +141,8 @@ class session (pgraph.graph):
         @kwarg crash_threshold     (Optional, def=3) Maximum number of crashes allowed before a node is exhaust
         @type  restart_sleep_time: Integer
         @kwarg restart_sleep_time: Optional, def=300) Time in seconds to sleep when target can't be restarted
+        @type  start_webserver:    Boolean
+        @kwarg start_webserver:    (Optional, def=True) Start webserver
         '''
 
         # run the parent classes initialization routine first.
@@ -151,6 +160,14 @@ class session (pgraph.graph):
         self.web_port            = web_port
         self.crash_threshold     = crash_threshold
         self.restart_sleep_time  = restart_sleep_time
+
+        self.layer2              = False
+        self.iface               = iface
+        self.afname              = af
+        self.connect_befor_send  = True
+        self.wait_on_recv        = True
+        self.start_webserver     = start_webserver
+
 
         self.total_num_mutations = 0
         self.total_mutant_index  = 0
@@ -171,9 +188,21 @@ class session (pgraph.graph):
 
         elif self.proto == "udp":
             self.proto = socket.SOCK_DGRAM
+            self.connect_befor_send = False
+
+        elif self.proto == "layer2":
+            self.layer2 = True
+            self.connect_befor_send = False
 
         else:
             raise sex.error("INVALID PROTOCOL SPECIFIED: %s" % self.proto)
+
+        if self.afname == "ipv4":
+            self.af = socket.AF_INET
+        elif self.afname == "ipv6":
+            self.af = socket.AF_INET6
+        else:
+            raise sex.error("INVALID ADDRESS FAMILY SPECIFIED: %s" % self.afname)
 
         # import settings if they exist.
         self.import_file()
@@ -315,6 +344,9 @@ class session (pgraph.graph):
         data["procmon_results"]     = self.procmon_results
         data['protmon_results']     = self.protmon_results
         data["pause_flag"]          = self.pause_flag
+        data["iface"]               = self.iface
+        data["af"]                  = self.afname
+        data["start_webserver"]     = self.start_webserver
 
         fh = open(self.session_filename, "wb+")
         fh.write(zlib.compress(cPickle.dumps(data, protocol=2)))
@@ -392,7 +424,7 @@ class session (pgraph.graph):
 
                 # exception error handling routine, print log message and restart target.
                 def error_handler (e, msg, target, sock=None):
-                    if sock:
+                    if sock and self.proto != "layer2":
                         sock.close()
 
                     msg += "\nException caught: %s" % repr(e)
@@ -424,62 +456,82 @@ class session (pgraph.graph):
                                 continue
 
                         try:
+
                             # establish a connection to the target.
-                            sock = socket.socket(socket.AF_INET, self.proto)
-                        except Exception, e:
-                            error_handler(e, "failed creating socket", target)
-                            continue
+                            if  self.layer2:
+                                sock = dnet.eth(self.iface)
 
-                        if self.bind:
+                            else:
+                                try:
+                                    sock = socket.socket(self.af, self.proto)
+                                    if self.af == socket.AF_INET6:
+                                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                                        if hasattr(socket, "SO_REUSEPORT"):
+                                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                                except Exception, e:
+                                    error_handler(e, "failed creating socket", target)
+                                    continue
+
+                            if self.bind:
+                                try:
+                                    sock.bind(self.bind)
+                                except Exception, e:
+                                    error_handler(e, "failed binding on socket", target, sock)
+                                    continue
+
                             try:
-                                sock.bind(self.bind)
+                                if self.proto != "layer2":
+                                    sock.settimeout(self.timeout)
+                                # Connect is needed only for TCP stream
+                                if self.connect_befor_send:
+                                    sock.connect((target.host, target.port))
                             except Exception, e:
-                                error_handler(e, "failed binding on socket", target, sock)
+                                error_handler(e, "failed connecting on socket", target, sock)
                                 continue
 
-                        try:
-                            sock.settimeout(self.timeout)
-                            # Connect is needed only for TCP stream
-                            if self.proto == socket.SOCK_STREAM:
-                                sock.connect((target.host, target.port))
-                        except Exception, e:
-                            error_handler(e, "failed connecting on socket", target, sock)
-                            continue
+                            # if SSL is requested, then enable it.
+                            if self.ssl:
+                                try:
+                                    ssl  = socket.ssl(sock)
+                                    sock = httplib.FakeSocket(sock, ssl)
+                                except Exception, e:
+                                    error_handler(e, "failed ssl setup", target, sock)
+                                    continue
 
-                        # if SSL is requested, then enable it.
-                        if self.ssl:
+                            # if the user registered a pre-send function, pass it the sock and let it do the deed.
                             try:
-                                ssl  = socket.ssl(sock)
-                                sock = httplib.FakeSocket(sock, ssl)
+                                self.pre_send(sock)
                             except Exception, e:
-                                error_handler(e, "failed ssl setup", target, sock)
+                                error_handler(e, "pre_send() failed", target, sock)
                                 continue
 
-                        # if the user registered a pre-send function, pass it the sock and let it do the deed.
-                        try:
-                            self.pre_send(sock)
-                        except Exception, e:
-                            error_handler(e, "pre_send() failed", target, sock)
-                            continue
+                            # send out valid requests for each node in the current path up to the node we are fuzzing.
+                            try:
+                                for e in path[:-1]:
+                                    node = self.nodes[e.dst]
+                                    self.transmit(sock, node, e, target)
+                            except Exception, e:
+                                error_handler(e, "failed transmitting a node up the path", target, sock)
+                                continue
 
-                        # send out valid requests for each node in the current path up to the node we are fuzzing.
-                        try:
-                            for e in path[:-1]:
-                                node = self.nodes[e.dst]
-                                self.transmit(sock, node, e, target)
-                        except Exception, e:
-                            error_handler(e, "failed transmitting a node up the path", target, sock)
-                            continue
+                            # now send the current node we are fuzzing.
+                            try:
+                                self.transmit(sock, self.fuzz_node, edge, target)
+                            except Exception, e:
+                                error_handler(e, "failed transmitting fuzz node", target, sock)
+                                continue
 
-                        # now send the current node we are fuzzing.
-                        try:
-                            self.transmit(sock, self.fuzz_node, edge, target)
-                        except Exception, e:
-                            error_handler(e, "failed transmitting fuzz node", target, sock)
-                            continue
+                            # if we reach this point the send was successful for break out of the while(1).
+                            break
 
-                        # if we reach this point the send was successful for break out of the while(1).
-                        break
+                        except sex.error, e:
+                            sys.stderr.write("Caught Sulley Exception\n")
+                            sys.stderr.write("\t" + e.__str__() + "\n")
+                            sys.exit(1)
+
+                        except OSError, e:
+                            sys.stderr.write("Something went wrong :/\n")
+                            sys.exit(1)
 
                     # if the user registered a post-send function, pass it the sock and let it do the deed.
                     # we do this outside the try/except loop because if our fuzz causes a crash then the post_send()
@@ -490,7 +542,8 @@ class session (pgraph.graph):
                         error_handler(e, "post_send() failed", target, sock)
 
                     # done with the socket.
-                    sock.close()
+                    if self.proto != "layer2":
+                        sock.close()
 
                     # delay in between test cases.
                     self.log("sleeping for %f seconds" % self.sleep_time, 5)
@@ -552,6 +605,9 @@ class session (pgraph.graph):
         self.procmon_results     = data["procmon_results"]
         self.protmon_results     = data["protmon_results"]
         self.pause_flag          = data["pause_flag"]
+        self.iface               = data["iface"]
+        self.afname              = data["af"]
+        self.start_webserver     = data["start_webserver"]
 
 
     ####################################################################################################################
@@ -814,15 +870,21 @@ class session (pgraph.graph):
                 self.log("Too much data for UDP, truncating to %d bytes" % MAX_UDP)
                 data = data[:MAX_UDP]
 
+        if self.layer2:
+            # Max Ethernet frame size
+            if len(data) > 1518:
+                self.log("Too much data for Ethernet, truncating to 1500 bytes")
+                data = data[:1518]
+
         try:
-            if self.proto == socket.SOCK_STREAM:
+            if self.connect_befor_send or self.proto == "layer2":
                 sock.send(data)
             else:
                 sock.sendto(data, (self.targets[0].host, self.targets[0].port))
         except Exception, inst:
-            self.log("Socket error, send: %s" % inst[1])
+            self.log("Socket error, send: %s" % inst)
 
-        if self.proto == socket.SOCK_STREAM or socket.SOCK_DGRAM:
+        if self.proto == socket.SOCK_STREAM or socket.SOCK_DGRAM and self.wait_on_recv:
             # XXX - might have a need to increase this at some point. (possibly make it a class parameter)
             try:
                 self.last_recv = sock.recv(10000)
