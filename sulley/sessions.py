@@ -9,6 +9,7 @@ import cPickle
 import threading
 import BaseHTTPServer
 import httplib
+import logging
 
 # libdnet for layer2 support
 import dnet
@@ -113,7 +114,7 @@ class connection (pgraph.edge.edge):
 
 ########################################################################################################################
 class session (pgraph.graph):
-    def __init__ (self, session_filename=None, skip=0, sleep_time=1.0, log_level=2, proto="tcp", iface="eth0", af="ipv4", bind=None, restart_interval=0, timeout=5.0, web_port=26000, crash_threshold=3, restart_sleep_time=300, start_webserver=False):
+    def __init__ (self, session_filename=None, skip=0, sleep_time=1.0, log_level=30, logfile=None, logfile_level=10, proto="tcp", iface="eth0", af="ipv4", bind=None, restart_interval=0, timeout=5.0, web_port=26000, crash_threshold=3, restart_sleep_time=300, start_webserver=False):
         '''
         Extends pgraph.graph and provides a container for architecting protocol dialogs.
 
@@ -124,7 +125,11 @@ class session (pgraph.graph):
         @type  sleep_time:         Float
         @kwarg sleep_time:         (Optional, def=1.0) Time to sleep in between tests
         @type  log_level:          Integer
-        @kwarg log_level:          (Optional, def=2) Set the log level, higher number == more log messages
+        @kwarg log_level:          (Optional, def=30) Set the log level (CRITICAL : 50 / ERROR : 40 / WARNING : 30 / INFO : 20 / DEBUG : 10)
+        @type  logfile:            String
+        @kwarg logfile:            (Optional, def=None) Name of log file
+        @type  logfile_level:      Integer
+        @kwarg logfile_level:      (Optional, def=10) Log level for log file, default is debug
         @type  proto:              String
         @kwarg proto:              (Optional, def="tcp") Communication protocol ("tcp", "udp", "ssl")
         @type  iface:              String
@@ -151,7 +156,6 @@ class session (pgraph.graph):
         self.session_filename    = session_filename
         self.skip                = skip
         self.sleep_time          = sleep_time
-        self.log_level           = log_level
         self.proto               = proto.lower()
         self.bind                = bind
         self.ssl                 = False
@@ -161,13 +165,32 @@ class session (pgraph.graph):
         self.crash_threshold     = crash_threshold
         self.restart_sleep_time  = restart_sleep_time
 
+        # Network informations
         self.layer2              = False
         self.iface               = iface
         self.afname              = af
         self.connect_befor_send  = True
         self.wait_on_recv        = True
-        self.start_webserver     = start_webserver
 
+
+        # Initialize logger
+        self.logger = logging.getLogger("Sulley_logger")
+        self.logger.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('[%(asctime)s] [%(levelname)s] -> %(message)s')
+
+        if logfile != None:
+            filehandler = logging.FileHandler(logfile)
+            filehandler.setLevel(logfile_level)
+            filehandler.setFormatter(formatter)
+            self.logger.addHandler(filehandler)
+
+        consolehandler = logging.StreamHandler()
+        consolehandler.setFormatter(formatter)
+        consolehandler.setLevel(log_level)
+        self.logger.addHandler(consolehandler)
+
+
+        self.start_webserver     = start_webserver
 
         self.total_num_mutations = 0
         self.total_mutant_index  = 0
@@ -332,7 +355,6 @@ class session (pgraph.graph):
         data["skip"]                = self.total_mutant_index
         data["sleep_time"]          = self.sleep_time
         data["restart_sleep_time"]  = self.restart_sleep_time
-        data["log_level"]           = self.log_level
         data["proto"]               = self.proto
         data["restart_interval"]    = self.restart_interval
         data["timeout"]             = self.timeout
@@ -396,8 +418,8 @@ class session (pgraph.graph):
             current_path  = " -> ".join([self.nodes[e.src].name for e in path[1:]])
             current_path += " -> %s" % self.fuzz_node.name
 
-            self.log("current fuzz path: %s" % current_path, 2)
-            self.log("fuzzed %d of %d total cases" % (self.total_mutant_index, self.total_num_mutations), 2)
+            self.logger.error("current fuzz path: %s" % current_path)
+            self.logger.error("fuzzed %d of %d total cases" % (self.total_mutant_index, self.total_num_mutations))
 
             done_with_fuzz_node = False
             crash_count         = 0
@@ -410,7 +432,7 @@ class session (pgraph.graph):
                 # if we have exhausted the mutations of the fuzz node, break out of the while(1).
                 # note: when mutate() returns False, the node has been reverted to the default (valid) state.
                 if not self.fuzz_node.mutate():
-                    self.log("all possible mutations for current fuzz node exhausted", 2)
+                    self.logger.error("all possible mutations for current fuzz node exhausted")
                     done_with_fuzz_node = True
                     continue
 
@@ -419,7 +441,7 @@ class session (pgraph.graph):
 
                 # if we've hit the restart interval, restart the target.
                 if self.restart_interval and self.total_mutant_index % self.restart_interval == 0:
-                    self.log("restart interval of %d reached" % self.restart_interval)
+                    self.logger.error("restart interval of %d reached" % self.restart_interval)
                     self.restart_target(target)
 
                 # exception error handling routine, print log message and restart target.
@@ -430,12 +452,12 @@ class session (pgraph.graph):
                     msg += "\nException caught: %s" % repr(e)
                     msg += "\nRestarting target and trying again"
 
-                    self.log(msg)
+                    self.logger.critical(msg)
                     self.restart_target(target)
 
                 # if we don't need to skip the current test case.
                 if self.total_mutant_index > self.skip:
-                    self.log("fuzzing %d of %d" % (self.fuzz_node.mutant_index, num_mutations), 2)
+                    self.logger.error("fuzzing %d of %d" % (self.fuzz_node.mutant_index, num_mutations))
 
                     # attempt to complete a fuzz transmission. keep trying until we are successful, whenever a failure
                     # occurs, restart the target.
@@ -546,7 +568,7 @@ class session (pgraph.graph):
                         sock.close()
 
                     # delay in between test cases.
-                    self.log("sleeping for %f seconds" % self.sleep_time, 5)
+                    self.logger.warning("sleeping for %f seconds" % self.sleep_time)
                     time.sleep(self.sleep_time)
 
                     # poll the PED-RPC endpoints (netmon, procmon etc...) for the target.
@@ -593,7 +615,6 @@ class session (pgraph.graph):
         self.session_filename    = data["session_filename"]
         self.sleep_time          = data["sleep_time"]
         self.restart_sleep_time  = data["restart_sleep_time"]
-        self.log_level           = data["log_level"]
         self.proto               = data["proto"]
         self.restart_interval    = data["restart_interval"]
         self.timeout             = data["timeout"]
@@ -611,16 +632,16 @@ class session (pgraph.graph):
 
 
     ####################################################################################################################
-    def log (self, msg, level=1):
+    #def log (self, msg, level=1):
         '''
         If the supplied message falls under the current log level, print the specified message to screen.
 
         @type  msg: String
         @param msg: Message to log
         '''
-
-        if self.log_level >= level:
-            print "[%s] %s" % (time.strftime("%I:%M.%S"), msg)
+#
+        #if self.log_level >= level:
+            #print "[%s] %s" % (time.strftime("%I:%M.%S"), msg)
 
 
     ####################################################################################################################
@@ -683,12 +704,12 @@ class session (pgraph.graph):
         # kill the pcap thread and see how many bytes the sniffer recorded.
         if target.netmon:
             bytes = target.netmon.post_send()
-            self.log("netmon captured %d bytes for test case #%d" % (bytes, self.total_mutant_index), 2)
+            self.logger.error("netmon captured %d bytes for test case #%d" % (bytes, self.total_mutant_index))
             self.netmon_results[self.total_mutant_index] = bytes
 
         # check if our fuzz crashed the target. procmon.post_send() returns False if the target access violated.
         if target.procmon and not target.procmon.post_send():
-            self.log("procmon detected access violation on test case #%d" % self.total_mutant_index)
+            self.logger.error("procmon detected access violation on test case #%d" % self.total_mutant_index)
 
             # retrieve the primitive that caused the crash and increment it's individual crash count.
             self.crashing_primitives[self.fuzz_node.mutant] = self.crashing_primitives.get(self.fuzz_node.mutant, 0) + 1
@@ -698,11 +719,11 @@ class session (pgraph.graph):
             else:                              msg = "primitive name: %s, " % self.fuzz_node.mutant.name
 
             msg += "type: %s, default value: %s" % (self.fuzz_node.mutant.s_type, self.fuzz_node.mutant.original_value)
-            self.log(msg)
+            self.logger.error(msg)
 
             # print crash synopsis
             self.procmon_results[self.total_mutant_index] = target.procmon.get_crash_synopsis()
-            self.log(self.procmon_results[self.total_mutant_index].split("\n")[0], 2)
+            self.logger.error(self.procmon_results[self.total_mutant_index].split("\n")[0])
 
             # if the user-supplied crash threshold is reached, exhaust this node.
             if self.crashing_primitives[self.fuzz_node.mutant] >= self.crash_threshold:
@@ -710,19 +731,19 @@ class session (pgraph.graph):
                 if not isinstance(self.fuzz_node.mutant, primitives.group):
                     if not isinstance(self.fuzz_node.mutant, blocks.repeat):
                         skipped = self.fuzz_node.mutant.exhaust()
-                        self.log("crash threshold reached for this primitive, exhausting %d mutants." % skipped)
+                        self.logger.warning("crash threshold reached for this primitive, exhausting %d mutants." % skipped)
                         self.total_mutant_index += skipped
                         self.fuzz_node.mutant_index += skipped
 
             # start the target back up.
             # If it returns False, stop the test
             if self.restart_target(target, stop_first=False) == False:
-                self.log("Restarting the target failed, exiting.")
+                self.logger.critical("Restarting the target failed, exiting.")
                 self.export_file()
                 try:
                     self.thread.join()
                 except:
-                    self.log( "No server launched", 10)
+                    self.logger.debug( "No server launched")
                 sys.exit(0)
 
 
@@ -779,12 +800,12 @@ class session (pgraph.graph):
 
         # vm restarting is the preferred method so try that first.
         if target.vmcontrol:
-            self.log("restarting target virtual machine")
+            self.logger.warning("restarting target virtual machine")
             target.vmcontrol.restart_target()
 
         # if we have a connected process monitor, restart the target process.
         elif target.procmon:
-            self.log("restarting target process")
+            self.logger.warning("restarting target process")
             if stop_first:
                 target.procmon.stop_target()
 
@@ -796,7 +817,7 @@ class session (pgraph.graph):
 
         # otherwise all we can do is wait a while for the target to recover on its own.
         else:
-            self.log("no vmcontrol or procmon channel available ... sleeping for %d seconds" % self.restart_sleep_time)
+            self.logger.error("no vmcontrol or procmon channel available ... sleeping for %d seconds" % self.restart_sleep_time)
             time.sleep(self.restart_sleep_time)
             # XXX : should be good to relaunch test for crash before returning False
             return False
@@ -827,11 +848,11 @@ class session (pgraph.graph):
             def exit_abruptly(signal, frame):
                 '''Save current settings (just in case) and exit'''
                 self.export_file()
-                self.log("SIGINT received ... exiting")
+                self.logger.critical("SIGINT received ... exiting")
                 try:
                     self.thread.join()
                 except:
-                    self.log( "No server launched", 10)
+                    self.logger.debug( "No server launched")
 
                 sys.exit(0)
             signal.signal(signal.SIGINT, exit_abruptly)
@@ -862,7 +883,7 @@ class session (pgraph.graph):
         if edge.callback:
             data = edge.callback(self, node, edge, sock)
 
-        self.log("xmitting: [%d.%d]" % (node.id, self.total_mutant_index), level=2)
+        self.logger.error("xmitting: [%d.%d]" % (node.id, self.total_mutant_index))
 
         # if no data was returned by the callback, render the node here.
         if not data:
@@ -879,13 +900,13 @@ class session (pgraph.graph):
                 MAX_UDP = 9216
 
             if len(data) > MAX_UDP:
-                self.log("Too much data for UDP, truncating to %d bytes" % MAX_UDP)
+                self.logger.debug("Too much data for UDP, truncating to %d bytes" % MAX_UDP)
                 data = data[:MAX_UDP]
 
         if self.layer2:
             # Max Ethernet frame size
             if len(data) > 1518:
-                self.log("Too much data for Ethernet, truncating to 1500 bytes")
+                self.logger.debug("Too much data for Ethernet, truncating to 1500 bytes")
                 data = data[:1518]
 
         try:
@@ -893,9 +914,9 @@ class session (pgraph.graph):
                 sock.send(data)
             else:
                 sock.sendto(data, (self.targets[0].host, self.targets[0].port))
-            self.log("Packet sent : " + str(data),  10)
+            self.logger.debug("Packet sent : " + repr(data))
         except Exception, inst:
-            self.log("Socket error, send: %s" % inst)
+            self.logger.error("Socket error, send: %s" % inst)
 
         if self.proto == socket.SOCK_STREAM or socket.SOCK_DGRAM and self.wait_on_recv:
             # XXX - might have a need to increase this at some point. (possibly make it a class parameter)
@@ -907,9 +928,9 @@ class session (pgraph.graph):
             self.last_recv = ""
 
         if len(self.last_recv) > 0:
-            self.log("received: [%d] %s" % (len(self.last_recv), self.last_recv), level=10)
+            self.logger.debug("received: [%d] %s" % (len(self.last_recv), repr(self.last_recv)))
         else:
-            self.log("Nothing received on socket.", 5)
+            self.logger.warning("Nothing received on socket.", 5)
             # Increment individual crash count
             self.crashing_primitives[self.fuzz_node.mutant] = self.crashing_primitives.get(self.fuzz_node.mutant,0) +1
             # Note crash information
