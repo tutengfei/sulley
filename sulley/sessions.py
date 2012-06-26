@@ -398,6 +398,7 @@ class session (pgraph.graph):
 
             this_node = self.root
 
+        if self.start_webserver:
             try:    self.server_init()
             except: return
 
@@ -629,20 +630,6 @@ class session (pgraph.graph):
         self.iface               = data["iface"]
         self.afname              = data["af"]
         self.start_webserver     = data["start_webserver"]
-
-
-    ####################################################################################################################
-    #def log (self, msg, level=1):
-        '''
-        If the supplied message falls under the current log level, print the specified message to screen.
-
-        @type  msg: String
-        @param msg: Message to log
-        '''
-#
-        #if self.log_level >= level:
-            #print "[%s] %s" % (time.strftime("%I:%M.%S"), msg)
-
 
     ####################################################################################################################
     def num_mutations (self, this_node=None, path=[]):
@@ -888,6 +875,7 @@ class session (pgraph.graph):
         # if no data was returned by the callback, render the node here.
         if not data:
             data = node.render()
+
 
         # if data length is > 65507 and proto is UDP, truncate it.
         # XXX - this logic does not prevent duplicate test cases, need to address this in the future.
