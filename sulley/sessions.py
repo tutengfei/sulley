@@ -12,7 +12,13 @@ import httplib
 import logging
 
 # libdnet for layer2 support
-import dnet
+try:
+    import dnet
+except ImportError:
+    # On Debian libdnet is called dumbnet
+    import dumbnet
+    dnet = dumbnet
+
 
 import blocks
 import pedrpc
@@ -586,13 +592,13 @@ class session (pgraph.graph):
             path.pop()
 
         # loop to keep the main thread running and be able to receive signals
-        if self.signal_module:
+        #if self.signal_module:
             # wait for a signal only if fuzzing is finished (this function is recursive)
             # if fuzzing is not finished, web interface thread will catch it
-            if self.total_mutant_index == self.total_num_mutations:
-                import signal
-                while True:
-                    signal.pause()
+            #if self.total_mutant_index == self.total_num_mutations:
+                #import signal
+                #while True:
+                    #signal.pause()
 
 
     ####################################################################################################################
