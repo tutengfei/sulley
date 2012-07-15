@@ -62,7 +62,8 @@ s_word("\x00\x01", fuzzable=False) #/* Opcode (1->request, 2->reply) */
 s_dword("\x01\x02\x03\x04", fuzzable=True)
 s_word("\x05\x06", fuzzable=True) #/* MAC-Src */
 s_dword("\x0a\x01\x01\x01", fuzzable=False) #/* IP-Src */
-s_binary("0x00 00 00 00 00 00") #/* MAC-Dst */
+#s_binary("0x00 00 00 00 00 00") #/* MAC-Dst */
+s_binary("0x08 00 27 69 d2 1c") #/* MAC-Dst */
 s_dword("\x0a\x01\x01\x02", fuzzable=False) #/* IP-Dst */
 s_random(0x0000, 1, 5, fuzzable=False)
 

@@ -34,6 +34,19 @@ if s_block_start("read_rrq"):
     s_static("\x00")
     s_block_end("read_rrq")
 
+s_initialize("tftp_read_octet_blksize")
+if s_block_start("read_rrq"):
+    s_static("\x00\x01")
+    s_string("uname.txt")
+    s_static("\x00")
+    s_static("octet")
+    s_static("\x00")
+    s_string("blksize")
+    s_static("\x00")
+    s_double(754, format="ascii")
+    s_static("\x00")
+    s_block_end("read_rrq")
+
 s_initialize("tftp_read_octet_options")
 if s_block_start("read_rrq_opt"):
     s_static("\x00\x01")

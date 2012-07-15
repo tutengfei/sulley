@@ -19,8 +19,9 @@ def crc16(data):
 
 s_initialize("ip1")
 # Ethernet
-s_binary("0xff ff ff ff ff ff", name="eth dst")
-s_binary("0x01 02 03 04 05 06", name="eth src")
+#s_binary("0xff ff ff ff ff ff", name="eth dst")
+s_binary("0x00 80 ee 2a b3 21", name="eth dst")
+s_binary("0x00 80 03 04 05 06", name="eth src")
 s_binary("0x08 00", name="eth proto")
 
 #IP
@@ -37,7 +38,8 @@ if s_block_start("ipfield1"):
     s_byte("\x40", name="TTL")
     s_byte("\x00", name="protocol")
     s_checksum("ipfield1", algorithm=crc16, length=2, name="chksum")
-    s_dword("\x0a\x01\x01\x01", name="ipsrc")
-    s_dword("\x0a\x01\x01\x02", name="ipdst")
+    #s_dword("\x0a\x01\x01\x01", name="ipsrc")
+    s_dword("\x0a\x03\x4b\x0c", name="ipsrc")
+    s_dword("\x0a\x03\x21\x01", name="ipdst")
 s_block_end("ipfield1")
 
