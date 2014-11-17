@@ -322,7 +322,7 @@ class Session(pgraph.Graph):
 
         data = {
             "session_filename": self.session_filename,
-            "skip": self.total_mutant_index,
+            "skip": self.skip,
             "sleep_time": self.sleep_time,
             "restart_sleep_time": self.restart_sleep_time,
             "proto": self.proto,

@@ -57,9 +57,15 @@ def calculate_four_byte_padding(string, character="\x00"):
     return character * ((4 - (len(string) & 3)) & 3)
 
 
-def crc16(string, value=0):
+def crc16(string, value=0xa001):
     """
     CRC-16 poly: p(x) = x**16 + x**15 + x**2 + 1
+    @:param value: CRC-16
+        P_16      0xa001
+        P_CCITT   0x1021
+        P-DNP     0xa6bc
+        p_KERMIT  0x8408
+        P_SICK    0x8005
     """
     crc16_table = []
     for byte in range(256):
@@ -67,7 +73,7 @@ def crc16(string, value=0):
 
         for bit in range(8):
             if (byte ^ crc) & 1:
-                crc = (crc >> 1) ^ 0xa001  # polly
+                crc = (crc >> 1) ^ value  # poly
             else:
                 crc >>= 1
 
